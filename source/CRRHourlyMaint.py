@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import boto3
 import os
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 
 def getparm (parmname, defaultval):
     try:

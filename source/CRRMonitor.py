@@ -395,6 +395,7 @@ def message_handler(event):
                     ddb_update_exp += ', replication_status = :b'
                     ddb_exp_attrs[':b'] = { 'S': 'FAILED' }
                     log_statistics(bucket,'FAILED',now,'0','1',300)
+                    print("replication FAILED")
 
         else:
             print('Unknown Replication Status: ' + repstatus)

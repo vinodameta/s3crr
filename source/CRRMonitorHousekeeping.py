@@ -4,7 +4,7 @@ import json
 import boto3
 import os
 import logging
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 from urllib2 import Request
 from urllib2 import urlopen
 
@@ -39,14 +39,20 @@ send_anonymous_data = getparm('send_anonymous_data','No')
 timefmt = '%Y-%m-%dT%H:%M:%SZ'
 roundTo = getparm('roundto', 300) # 5 minute buckets for CW metrics
 purge_thresh = getparm('purge_thresh', 24) # threshold in hours
-client={
-    'cw': { 'service': 'cloudwatch' },
-    'ddb': { 'service': 'dynamodb'}
+client = {
+    'cw': {
+        'service': 'cloudwatch'
+    },
+    'ddb': {
+        'service': 'dynamodb'
+    }
 }
 # optionally include firehose
 if stream_to_kinesis != 'No':
     #kinesisfirestream = ddbtable + 'DeliveryStream'
-    client['firehose'] = { 'service': 'firehose' }
+    client['firehose'] = {
+        'service': 'firehose'
+    }
 
 # =====================================================================
 # connect_clients
@@ -121,7 +127,6 @@ def lambda_handler(event, context):
                 print(e)
                 print('Error creating CloudWatch metric FailedReplications')
                 raise e
-
         else:
             try:
                 client['cw']['handle'].put_metric_data(
@@ -148,7 +153,6 @@ def lambda_handler(event, context):
                 print(e)
                 print('Error creating CloudWatch metric')
                 raise e
-
             try:
                 client['cw']['handle'].put_metric_data(
                     Namespace='CRRMonitor',

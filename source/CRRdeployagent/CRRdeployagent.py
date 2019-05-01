@@ -7,26 +7,43 @@ import cfn_resource
 
 handler = cfn_resource.Resource()
 
-source_buckets = []
 
 ###########Get Buckets and Agent Region #################
 
-def get_replica_buckets(client):
+def get_replica_buckets(client, list_buckets):
+    """
+    :Args:
+
+      client: boto3 s3 client
+      list_buckets: a list of bucket objects
+
+    :Returns:
+
+      replica_buckets: list of destination buckets
+
+      source_buckets: list of names of the buckets with CRR enabled
+    """
     print('List Replica Buckets:')
     try:
-        list_buckets = client.list_buckets()['Buckets']
         replica_buckets = []
-        for i in list_buckets:
-            bucket_response = get_bucket_replication(i['Name'],client)
+        source_buckets = []
+        for bucket in list_buckets:
+            bucket_response = get_bucket_replication(bucket['Name'], client)
             if 'ReplicationConfigurationError-' != bucket_response \
                     and bucket_response['ReplicationConfiguration']['Rules'][0]['Status'] != 'Disabled':
-                source_buckets.append(i['Name'])
+                source_buckets.append(bucket['Name'])
                 dest_bucket_arn = bucket_response['ReplicationConfiguration']['Rules'][0]['Destination']['Bucket']
                 replica_buckets.append(dest_bucket_arn.split(':',5)[5])
     except Exception as e:
         print(e)
         raise e
-    return replica_buckets
+    return replica_buckets, source_buckets
+
+def comma_delimited_to_list(cd_list):
+    """converts a comma delimited list string to a list object"""
+    return [
+        bucket_name.strip() for bucket_name in cd_list.split(',')
+    ]
 
 def get_bucket_replication(bucket_name,client):
     try:
@@ -38,13 +55,27 @@ def get_bucket_replication(bucket_name,client):
         response = "ReplicationConfigurationError-"
     return response
 
+def get_source_buckets(buckets_prop):
+    client = boto3.client('s3')
+    all_buckets = client.list_buckets()['Buckets']
+    if buckets_prop == 'ALL':
+        final_bucket_list = all_buckets
+    else:
+        print("CUSTOM BUCKET LIST {}".format(buckets_prop))
+        input_bucket_list = comma_delimited_to_list(buckets_prop)
+        final_bucket_list = []
+        for bucket in all_buckets:
+            if bucket['Name'] in input_bucket_list:
+                final_bucket_list.append(bucket)
+    return final_bucket_list
+
 #Gets the list of agent regions for Agent deployment
 
-def get_agent_regions():
+def get_agent_regions(src_bucket_list):
     print('AgentRegionList:')
     try:
         client = boto3.client('s3')
-        replica_buckets = get_replica_buckets(client)
+        replica_buckets, source_buckets = get_replica_buckets(client, src_bucket_list)
         agent_set = set([])
         for bucket in replica_buckets:
             response = client.get_bucket_location(
@@ -81,25 +112,31 @@ def create_agent(event, context):
     topic_name = event["ResourceProperties"]["Topic"] # SNS topic
     queue_arn = event["ResourceProperties"]["CRRQueueArn"] # URL of the SQS Queue
     table_name = event["ResourceProperties"]["CRRMonitorTable"]
+    monitor_region = event['ResourceProperties']['MonitorRegion']
+    buckets_prop = event['ResourceProperties']['buckets']
+
+    final_bucket_list = get_source_buckets(buckets_prop)
 
     ##Enable time to Live for DynamoDB table CRRMonitor
-    time_to_live(table_name)
+    time_to_live(table_name, monitor_region)
 
-    agent_regions = get_agent_regions()
+    agent_regions = get_agent_regions(final_bucket_list)
     # Default value for returning resourceid
-    physical_resource_id = { 'PhysicalResourceId': 'CRRMonitorAgent-us-east-1'  }
+    physical_resource_id = {
+        'PhysicalResourceId': 'CRRMonitorAgent-us-east-1'
+    }
 
     for region in agent_regions:
-        physical_resource_id = agent_creator(region,topic_name,queue_arn)
+        physical_resource_id = agent_creator(region, topic_name, queue_arn)
 
     return physical_resource_id
 
-def time_to_live(table_name):
+def time_to_live(table_name, region):
     # -----------------------------------------------------------------
     # Create client connections
     #
     try:
-        client = boto3.client('dynamodb')
+        client = boto3.client(service_name='dynamodb', region_name=region)
 
         response = client.update_time_to_live(
             TableName=table_name,
@@ -205,24 +242,40 @@ def agent_creator(agt_region, topic_name, queue_arn):
 
     return { 'Data': { 'TopicArn': topicarn }, 'PhysicalResourceId': 'CRRMonitorAgent-' + agt_region}
 
+
 # =====================================================================
 # UPDATE
 #
 @handler.update
 def update_agent(event, context):
-    event["ResourceProperties"]["AgentRegion"] # where to create the agent
-    event["ResourceProperties"]["Topic"] # SNS topic
+    topic_name = event["ResourceProperties"]["Topic"] # SNS topic
+    queue_arn = event["ResourceProperties"]["CRRQueueArn"] # URL of the SQS Queue
+    table_name = event["ResourceProperties"]["CRRMonitorTable"]
+    monitor_region = event['ResourceProperties']['MonitorRegion']
+    buckets_prop = event['ResourceProperties']['buckets']
 
-    # No update action necessary
-    return {}
+    final_bucket_list = get_source_buckets(buckets_prop)
+
+    agent_regions = get_agent_regions(final_bucket_list)
+    # Default value for returning resourceid
+    physical_resource_id = {
+        'PhysicalResourceId': 'CRRMonitorAgent-us-east-1'
+    }
+
+    for region in agent_regions:
+        physical_resource_id = agent_creator(region, topic_name, queue_arn)
+
+    return physical_resource_id
+
 
 # =====================================================================
 # DELETE
 #
 @handler.delete
 def delete_agent(event, context):
-
-    agent_regions = get_agent_regions()
+    buckets_prop = event['ResourceProperties']['buckets']
+    final_bucket_list = get_source_buckets(buckets_prop)
+    agent_regions = get_agent_regions(final_bucket_list)
     topic_name = event["ResourceProperties"]["Topic"] # SNS topic
 
     for region in agent_regions:
